@@ -1,4 +1,4 @@
-#! python3
+# -*- coding: utf-8 -*-  
 
 import re
 import subprocess # nosec
@@ -55,6 +55,6 @@ def get_scale(root):
 				universal_newlines=True) as p:
 			return float(p.stdout.read().rpartition(" ")[-1])
 	except Exception: # pylint: disable=broad-except
-		traceback.print_exc()
-		
+		#traceback.print_exc()
+		print 'Gnome need update!'
 	return 1.0

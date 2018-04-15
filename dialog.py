@@ -1,7 +1,7 @@
-#! python3
+# -*- coding: utf-8 -*-  
 
-import tkinter as tk
-from tkinter import ttk
+import Tkinter as tk
+import ttk
 
 from core import safe_tk
 

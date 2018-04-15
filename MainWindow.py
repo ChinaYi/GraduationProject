@@ -4,14 +4,25 @@ import os
 import sys
 from time import time
 import cv2
+import json
 
-import tkinter as tk
-from tkinter import ttk, font, messagebox
-from tkinter.filedialog import askdirectory
+# model import
+import numpy as np
+from faster_rcnn import network
+from faster_rcnn.faster_rcnn import FasterRCNN
+from faster_rcnn.utils.timer import Timer
+
+# GUI import
+import Tkinter as tk
+import ttk
+import tkFont as font
+import tkMessageBox as messagebox
+import tkFileDialog as fileDialog
 from table import Table
 from dialog import Dialog
 from core import get_scale, safe_tk, STATE
 
+from demo import XML
 def create_mission_table(parent):
     return Table(
         parent,
@@ -21,7 +32,7 @@ def create_mission_table(parent):
             "width": 25
         }, {
             "id": "name",
-            "text": "任務"
+            "text": "任务"
         }, {
             "id": "accuracy",
             "text": "置信度",
@@ -29,146 +40,40 @@ def create_mission_table(parent):
             "anchor": "center"
         }, {
             "id": "state",
-            "text": "狀態",
+            "text": "状态",
             "width": 70,
             "anchor": "center"
         }]
     )
-    
-def select_title(parent, mission):
-    """Create dialog to change mission title."""
-    class _Dialog(Dialog):
-        def create_body(self):
-            entry = ttk.Entry(self.body)
-            entry.insert(0, safe_tk(mission.title))
-            entry.selection_range(0, "end")
-            entry.pack()
-            entry.focus_set()
-            self.entry = entry
 
-        def apply(self):
-            return self.entry.get()
-            
-    new_title = _Dialog(parent, title="重命名").wait()
-    if not new_title:
-        return
-    with edit_mission_id(mission):
-        mission.title = new_title
-
-def select_episodes(parent, mission):
-    """Create dialog to select episodes."""
-    class _Dialog(Dialog):
-        def create_body(self):
-            xscrollbar = ttk.Scrollbar(self.body, orient="horizontal")
-            canvas = tk.Canvas(
-                self.body,
-                xscrollcommand=xscrollbar.set,
-                highlightthickness="0"
-            )
-
-            self.checks = []
-
-            def set_page(check, start, end):
-                def callback():
-                    if check.instate(("selected",)):
-                        value = ("selected", )
-                    else:
-                        value = ("!selected", )
-
-                    for i in range(start, end):
-                        self.checks[i][1].state(value)
-                return callback
-
-            window = None
-            window_column = 0
-            window_left = 0
-            for i, ep in enumerate(mission.episodes):
-                # create a new window for every 200 items
-                if i % 200 == 0:
-                    if window:
-                        window.update_idletasks()
-                        window_left += window.winfo_reqwidth()
-                        window_column = i // 20
-                    window = ttk.Frame(canvas)
-                    canvas.create_window((window_left, 0), window=window,
-                        anchor="nw")
-            
-                check = ttk.Checkbutton(window, text=safe_tk(ep.title))
-                check.state(("!alternate",))
-                if not ep.skip:
-                    check.state(("selected",))
-                check.grid(
-                    column=(i // 20) - window_column,
-                    row=i % 20,
-                    sticky="w"
-                )
-                self.checks.append((ep, check))
-                
-                # checkbutton for each column
-                if i % 20 == 19 or i == len(mission.episodes) - 1:
-                    check = ttk.Checkbutton(window)
-                    check.state(("!alternate", "selected"))
-                    check.grid(
-                        column=(i // 20) - window_column,
-                        row=20,
-                        sticky="w"
-                    )
-                    check.config(command=set_page(check, i - 19, i + 1))
-                    
-            # Resize canvas
-            canvas.update_idletasks()
-            cord = canvas.bbox("all")
-            canvas.config(
-                scrollregion=cord,
-                height=cord[3],
-                width=cord[2]
-            )
-
-            # caculates canvas's size then deside whether to show scrollbar
-            def decide_scrollbar(_event):
-                if canvas.winfo_width() >= canvas.winfo_reqwidth():
-                    xscrollbar.pack_forget()
-                    canvas.unbind("<Configure>")
-            canvas.bind("<Configure>", decide_scrollbar)
-
-            # draw innerframe on canvas then show
-            canvas.pack()
-
-            # link scrollbar to canvas then show
-            xscrollbar.config(command=canvas.xview)
-            xscrollbar.pack(fill="x")
-
-        def create_buttons(self):
-            ttk.Button(
-                self.btn_bar, text="反相", command=self.toggle
-            ).pack(side="left")
-            super().create_buttons()
-
-        def apply(self):
-            count = 0
-            for ep, ck in self.checks:
-                ep.skip = not ck.instate(("selected",))
-                count += not ep.skip
-            return count
-
-        def toggle(self):
-            for _ep, ck in self.checks:
-                if ck.instate(("selected", )):
-                    ck.state(("!selected", ))
-                else:
-                    ck.state(("selected", ))
-
-    init_episode(mission)
-    select_count = _Dialog(parent, title="選擇集數").wait()
-    uninit_episode(mission)
-    
-    return select_count
+def create_done_table(parent):
+    table = Table(parent, columns = [{
+            "id": "host",
+            "text": '文件',
+            "anchor" : "center"
+        }, {
+            "id": "mod",
+            "text": "长度",
+            "anchor": "center"
+        }], tv_opt={"show": "headings"})
+    return table
 
 class MainWindow():
+    def __init__(self):
+        
+        self._load_config()
+        self.finished_list = []
+        self.image_list = []
+        self.video_path = ''
+        self.info_dict= {}
+        self.result_dir = ''
+        self._create_view()
+        self._bind_event()
+        self.root.mainloop()
     def _create_view(self):
         # root
         self.root = tk.Tk()
-        self.root.title("易方遒毕设")
+        self.root.title('易方遒毕设')
         
         # setup theme on linux
         if sys.platform.startswith("linux"):
@@ -209,9 +114,8 @@ class MainWindow():
         
         # url entry
         '''
-                                     改成获取本地URL
+            改成获取本地URL
         '''
-
         entry_url = ttk.Entry(self.root)
         entry_url.pack(fill="x")
         self.entry_url = entry_url
@@ -233,32 +137,34 @@ class MainWindow():
 
         # done list
         frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="已完成")
+        self.notebook.add(frame, text="未完成")
 
         # waiting list
         frame = ttk.Frame(self.notebook)
-        self.notebook.add(frame, text="未完成")
+        self.notebook.add(frame, text="已完成")
         
-        table = Table(frame, columns = [{
-            "id": "host",
-            "text": "位置",
-            "anchor" : "center"
-        }, {
-            "id": "mod",
-            "text": "文件",
-            "anchor": "center"
-        }], tv_opt={"show": "headings"})
+        # done_table
+        self.done_table = create_done_table(frame)
         
-        for domain in [('test1', 'test2')]:
+        
+        '''for domain in [('test1', 'test2')]:
             table.add({
                 "host": domain[0],
                 "mod": domain[1]
-            })
+            })'''
         # status bar
-        statusbar = ttk.Label(self.root, text="Comic Crawler", anchor="e")
-        statusbar.pack(anchor="e")
-        self.statusbar = statusbar
+        self.statusbar = ttk.Label(self.root)
+        self.statusbar.pack(anchor="e")
+        self.statusbar_stringvar = tk.StringVar()
+        self.statusbar['textvariable'] = self.statusbar_stringvar
+        self.statusbar_stringvar.set('Chinayi')
     
+    def _load_config(self):
+        with open('config.txt','r') as f:
+            self.config = eval(f.readline())
+    def _update_config(self):
+        with open('config.txt','w') as f:
+            f.write(str(self.config))
     def _create_btn_bar(self):
         """Draw the button bar"""
         buttonbox = ttk.Frame(self.root)
@@ -272,7 +178,7 @@ class MainWindow():
         btnstart.pack(side="left")
         self.btn_start = btnstart
 
-        btnstop = ttk.Button(buttonbox, text="停止分析")
+        btnstop = ttk.Button(buttonbox, text="从xml中还原")
         btnstop.pack(side="left")
         self.btn_stop = btnstop
 
@@ -286,31 +192,193 @@ class MainWindow():
     
     def _bind_event(self):
         def addurl():
-            path_ = tk.filedialog.askdirectory()
+            self.video_path = fileDialog.askopenfilename()
             self.entry_url.delete(0, "end")
-            self.entry_url.insert(0, path_)
-            self.unfinished_list = getFileList(self.unfinished_list, path_)
-            if len(self.unfinished_list) > 0:
-                self.doing = self.unfinished_list[0]
+            self.entry_url.insert(0, self.video_path)
+            self.image_list = self.cut_video(self.video_path)
             
+            self.statusbar_stringvar.set('open success!')
+            
+            # update self.view_data
+            self.view_table.clear()
+            for i in range(len(self.image_list)):
+                self.view_table.add({
+                        #'#0': i,
+                        'name': self.video_path.split('/')[-1].split('.')[0] + '_' + str(i + 1) + '.jpg', # $video_i.jpg
+                        'accuracy' : 0,
+                        'state' : 'no'
+                    }, key = i + 1)
+            #print self.view_table.key_index
+            '''self.view_table.update(1, **{
+                    'name': self.video_path.split('/')[-1].split('.')[0] + '_' + str(i + 1) + '.jpg',
+                    'accuracy': 0,
+                    'state': 'yes'
+                })'''
         self.btn_addurl["command"] = addurl
         
-    def _cutVieo(self, path, src = 'SAME', frame_count = 1, debug = True):
-        [dirname, filename] = os.path.split(path)
-        if src == 'SAME':
-            src = os.mkdir(os.path.join(dirname, filename.split('.')[0]))
-        cap = cv2.VideoCapture(path)
-        success = True
-        c = 1
-        while(success):
-            success, frame = cap.read()
-            if debug:
-                print('Read a new frame')
-            if c % frame_count == 0:
-                cv2.write(src +  c // frame_count + '.jpg')
-            c = c + 1
+        def start_analysis():
+            
+            self.result_dir = self.video_path.split('.')[0]
+            if not os.path.exists(self.result_dir):
+                #print(result_dir)
+                os.makedirs(self.result_dir)
+            #demo.test_list(self.image_list, result_dir)
+            self.info_dict = self.analysis_video(self.result_dir)
+            self.info_dict['video'] = os.path.basename(self.video_path)
+        self.btn_start['command'] = start_analysis
+        
+        def generate_xml():
+            '''
+                Write the Bbox information to $self.video_path.xml file
+            '''
+            Xml = XML()
+            xml_txt = Xml.generate(self.info_dict)
+            xml_txt_path = os.path.join(self.result_dir, os.path.basename(self.video_path).split('.')[0] + '.xml')
+            with open(xml_txt_path, 'w') as f:
+                f.writelines(xml_txt)
+            
+            self.statusbar_stringvar.set(xml_txt_path + ' done!')
+            
+            # adding information to done_table
+            self.done_table.add({
+                    "host": self.video_path,
+                    "mod": len(self.image_list)
+                })
+        self.btn_clean['command'] = generate_xml
+        
+        def recoverfromxml():
+            '''
+                restore the pics from xml and the video
+            '''
+            Xml = XML()
+            xmlpath = fileDialog.askopenfilename()
+            self.entry_url.delete(0, "end")
+            self.entry_url.insert(0, xmlpath)
+            
+            img_list = Xml.recover(xmlpath)
+            self.view_table.clear()
+            for i in range(len(img_list)):
+                self.view_table.add({
+                        #'#0': i,
+                        'name': img_list[i][0],
+                        'accuracy' : img_list[i][1],
+                        'state' : 'yes'
+                    }, key = i + 1)
+            self.statusbar_stringvar.set('recovered from ' + xmlpath)
+        self.btn_stop['command'] = recoverfromxml
+        
+        def schedule(a,b,c):
+            '''
+                print the process of downloading
+            '''
+            per = 100.0 * a *b / c
+            if per > 100:
+                per = 100
+            self.statusbar_stringvar.set('downloading: %.2f% %' %per)
+        
+        def getservermodelversion():
+            import urllib2
+            f = urllib2.urlopen(self.config['server_url'] + self.config['server_config'])
+            return eval(f.read())['version']
+        #print getservermodelversion()
+        def update():
+            '''
+                update the newest model
+            '''
+            import urllib
+            remote_version = getservermodelversion()
+            if remote_version == self.config['version']:
+                messagebox.showinfo('update', '已经是最新！')
+                return
+            else:
+                confirm = messagebox.askokcancel('%s -> %s' %(self.config['version'], remote_version),'是否下载最新模型')
+                if not confirm:
+                    return
+            local = os.path.join(os.curdir, 'model_new.h5')
+            urllib.urlretrieve(self.config['server_url'] + self.config['server_model'], local, schedule)
+            
+            confirm = messagebox.askokcancel('Confirm', '替换旧模型？')
+            if confirm:
+                os.remove(os.path.join(os.curdir, 'model.h5'))
+                os.rename(os.path.join(os.curdir,'model_new.h5'), os.path.join(os.curdir, 'model.h5'))
+                self.statusbar_stringvar.set('替换成功！')
+                self.config['version'] = remote_version
+                self._update_config()
+            else:
+                os.remove(os.path.join(os.curdir,'model_new.h5'))
+                self.statusbar_stringvar.set('未替换')
+        self.btn_config['command'] = update
+    def analysis_video(self, result_dir):
+        
+        self.statusbar_stringvar.set('Analysis..Please wait..')
+        model_file = 'model.h5'
+        detector = FasterRCNN()
+        network.load_net(model_file, detector)
+        detector.cuda()
+        detector.eval()
+        print('load model successfully!')
+        
+        info_dict = {}
+        info_dict['pictures'] = []
+        for index in range(len(self.image_list)):
+            accuracy = 0.
+            pic_info = {}
+            pic_info['objects'] = []
+            dets, scores, classes = detector.detect(self.image_list[index], 0.8)
+            im2show = np.copy(self.image_list[index])
+            for i, det in enumerate(dets):
+                object_info = {}
+                det = tuple(int(x) for x in det)
+                cv2.rectangle(im2show, det[0:2], det[2:4], (255, 205, 51), 2)
+                cv2.putText(im2show, '%s: %.3f' % (classes[i], scores[i]), (det[0], det[1] + 15), cv2.FONT_HERSHEY_PLAIN,
+                        1.0, (0, 0, 255), thickness=1)
+                accuracy += scores[i]
+                #object info initial
+                object_info['name'] = classes[i]
+                object_info['accuracy'] = scores[i]
+                object_info['bbox'] = det
+                pic_info['objects'].append(object_info)
+                
+            # pic_info initial
+            
+            pic_info['filename'] = os.path.basename(self.video_path).split('.')[0] + '_' + str(index + 1) + '.jpg'
+            pic_info['size'] = im2show.shape
+            info_dict['pictures'].append(pic_info)
+            
+            cv2.imwrite(os.path.join(result_dir, pic_info['filename']), im2show)
+            self.view_table.update(index + 1, **{
+                    'name': pic_info['filename'],
+                    'accuracy': accuracy / len(classes),
+                    'state': 'yes'
+                })
+        self.statusbar_stringvar.set('Analysis done!')
+        return info_dict
+        
+    def cut_video(self, video_path, timeF = 25):
+        '''
+            opencv3
+            return list of images
+        '''
+        vc = cv2.VideoCapture(video_path)
+        image_list = []
+        index = 1
+        if vc.isOpened():
+            self.statusbar_stringvar.set('opening...Please wait...')
+            rval, frame = vc.read()
+        else:
+            self.statusbar_stringvar.set('Not a video! Please reopen it!')
+            rval = False
+            
+        while rval:
+            rval, frame = vc.read()
+            
+            if index % timeF == 0:
+                image_list.append(frame)
+            index += 1
             cv2.waitKey(1)
-        cap.release()
+        vc.release()
+        return image_list
+
             
     def _updateNewVideo(self, path):
         '''
@@ -319,40 +387,5 @@ class MainWindow():
         if len(self.unfinished_list) > 0:
             self.doing = self.unfinished_list[0]
             self.unfinished_list = self.unfinished_list[1:None]
-            
-            
-    def __init__(self):
-        self.unfinished_list = []
-        self.finished_list = []
-        self.doing = ''
-        
-        
-        self._create_view()
-        self._bind_event()
-        self.root.mainloop()
-
-def getFileList(fileList, path):
-    newDir = path
-    if not os.path.exists(newDir):
-        return fileList
-    else:
-        if os.path.isfile(newDir):
-            fileList.append(newDir)
-        else:
-            for s in os.listdir(newDir):
-                newDir = os.path.join(path, s)
-                getFileList(fileList, newDir)
-        return fileList
-def create_scrollable_text(parent):
-
-    scrbar = ttk.Scrollbar(parent)
-    scrbar.pack(side="right", fill="y")
-    
-    text = tk.Text(parent, height=3, yscrollcommand=scrbar.set)
-    text.pack(expand=True, fill="both")
-    
-    scrbar.config(command=text.yview)
-
-    return text
 
 mainwindow = MainWindow()

@@ -1,9 +1,8 @@
-#! python3
-
-from tkinter import ttk
-
+#from tkinter import ttk
+import __future__
+import ttk
 class Table:
-	def __init__(self, parent, *, tv_opt={}, columns=[]):
+	def __init__(self, parent, tv_opt={}, columns=[]):
 		# scrollbar
 		scrbar = ttk.Scrollbar(parent)
 		scrbar.pack(side="right", fill="y")
@@ -12,7 +11,9 @@ class Table:
 		# treeview
 		tv = ttk.Treeview(
 			parent,
-			columns=[c["id"] for c in columns if c["id"] != "#0"],
+			columns=[c["id"] for c in columns if c["id"] != '#0'],
+			#columns=[c["id"] for c in columns if c["id"] != ' '],
+			#columns = [c['id'] for c in columns]
 			yscrollcommand=scrbar.set,
 			**tv_opt
 		)
@@ -27,7 +28,7 @@ class Table:
 		self.key_index = {}
 		self.iid_index = {}
 		
-	def add(self, row, *, key=None):
+	def add(self, row, key=None):
 		if key and key in self.key_index:
 			return
 		iid = self.tv.insert("", "end")
@@ -47,7 +48,7 @@ class Table:
 			del self.key_index[key]
 			del self.iid_index[iid]
 		
-	def clear(self, *, exclude=[]):
+	def clear(self, exclude=[]):
 		keys = [key for key in self.key_index if key not in exclude]
 		self.remove(*keys)
 		
